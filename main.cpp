@@ -7,8 +7,8 @@
 //
 
 #if defined (__APPLE__)
-    #define GLFW_INCLUDE_GLCOREARB
-    #define GL_SILENCE_DEPRECATION
+#define GLFW_INCLUDE_GLCOREARB
+#define GL_SILENCE_DEPRECATION
 #else
 #define GLEW_STATIC
 #include <GL/glew.h>
@@ -59,6 +59,9 @@ gps::Camera myCamera(
 float cameraSpeed = 0.01f;
 
 bool pressedKeys[1024];
+unsigned int skyboxVAO, skyboxVBO;
+unsigned int cubemapTexture;
+
 float angleY = 0.0f;
 
 float lastX = glWindowWidth / 2.0f;
@@ -80,8 +83,54 @@ gps::Shader screenQuadShader;
 
 GLuint shadowMapFBO;
 GLuint depthMapTexture;
+gps::Shader skyboxShader;
 
+float skyboxVertices[] = {
+    -1.0f, 1.0f, -1.0f,
+    -1.0f, -1.0f, -1.0f,
+    1.0f, -1.0f, -1.0f,
+    1.0f, -1.0f, -1.0f,
+    1.0f, 1.0f, -1.0f,
+    -1.0f, 1.0f, -1.0f,
+
+    -1.0f, -1.0f, 1.0f,
+    -1.0f, -1.0f, -1.0f,
+    -1.0f, 1.0f, -1.0f,
+    -1.0f, 1.0f, -1.0f,
+    -1.0f, 1.0f, 1.0f,
+    -1.0f, -1.0f, 1.0f,
+
+    1.0f, -1.0f, -1.0f,
+    1.0f, -1.0f, 1.0f,
+    1.0f, 1.0f, 1.0f,
+    1.0f, 1.0f, 1.0f,
+    1.0f, 1.0f, -1.0f,
+    1.0f, -1.0f, -1.0f,
+
+    -1.0f, -1.0f, 1.0f,
+    -1.0f, 1.0f, 1.0f,
+    1.0f, 1.0f, 1.0f,
+    1.0f, 1.0f, 1.0f,
+    1.0f, -1.0f, 1.0f,
+    -1.0f, -1.0f, 1.0f,
+
+    -1.0f, 1.0f, -1.0f,
+    1.0f, 1.0f, -1.0f,
+    1.0f, 1.0f, 1.0f,
+    1.0f, 1.0f, 1.0f,
+    -1.0f, 1.0f, 1.0f,
+    -1.0f, 1.0f, -1.0f,
+
+    -1.0f, -1.0f, -1.0f,
+    -1.0f, -1.0f, 1.0f,
+    1.0f, -1.0f, -1.0f,
+    1.0f, -1.0f, -1.0f,
+    -1.0f, -1.0f, 1.0f,
+    1.0f, -1.0f, 1.0f
+};
 bool showDepthMap;
+
+unsigned int loadCubemap(std::vector<std::string>);
 
 GLenum glCheckError_(const char *file, int line) {
     GLenum errorCode;
@@ -106,7 +155,7 @@ GLenum glCheckError_(const char *file, int line) {
 
 #define glCheckError() glCheckError_(__FILE__, __LINE__)
 
-void windowResizeCallback(GLFWwindow* window, int width, int height) {
+void windowResizeCallback(GLFWwindow *window, int width, int height) {
     fprintf(stdout, "Window resized to width: %d, height: %d\n", width, height);
     glWindowWidth = width;
     glWindowHeight = height;
@@ -114,8 +163,8 @@ void windowResizeCallback(GLFWwindow* window, int width, int height) {
     // Update viewport and projection matrix for new window dimensions
     glViewport(0, 0, retina_width, retina_height);
     projection = glm::perspective(glm::radians(45.0f),
-                                (float)retina_width / (float)retina_height,
-                                0.1f, 1000.0f);
+                                  (float) retina_width / (float) retina_height,
+                                  0.1f, 1000.0f);
     myCustomShader.useShaderProgram();
     glUniformMatrix4fv(projectionLoc, 1, GL_FALSE, glm::value_ptr(projection));
 }
@@ -135,7 +184,7 @@ void keyboardCallback(GLFWwindow *window, int key, int scancode, int action, int
     }
 }
 
-void mouseCallback(GLFWwindow* window, double xpos, double ypos) {
+void mouseCallback(GLFWwindow *window, double xpos, double ypos) {
     if (firstMouse) {
         lastX = xpos;
         lastY = ypos;
@@ -273,6 +322,8 @@ void initObjects() {
 void initShaders() {
     myCustomShader.loadShader("shaders/shader.vert", "shaders/shader.frag");
     myCustomShader.useShaderProgram();
+    skyboxShader.loadShader("shaders/skyboxShader.vert", "shaders/skyboxShader.frag");
+    skyboxShader.useShaderProgram();
 }
 
 void initUniforms() {
@@ -308,8 +359,11 @@ void initUniforms() {
     lightShader.useShaderProgram();
     glUniformMatrix4fv(glGetUniformLocation(lightShader.shaderProgram, "projection"), 1, GL_FALSE,
                        glm::value_ptr(projection));
-}
 
+    myCustomShader.useShaderProgram();
+    glUniform3f(glGetUniformLocation(myCustomShader.shaderProgram, "ambientLight"), 0.2f, 0.2f, 0.2f);
+    glUniform1f(glGetUniformLocation(myCustomShader.shaderProgram, "ambientStrength"), 0.2f);
+}
 
 
 void initFBO() {
@@ -325,7 +379,7 @@ void initFBO() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER);
-    float borderColor[] = { 1.0f, 1.0f, 1.0f, 1.0f };
+    float borderColor[] = {1.0f, 1.0f, 1.0f, 1.0f};
     glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, borderColor);
 
     // Attach depth texture to FBO
@@ -342,14 +396,68 @@ void initFBO() {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
+void initSkybox() {
+    // Generare VAO și VBO pentru skybox
+    glGenVertexArrays(1, &skyboxVAO);
+    glGenBuffers(1, &skyboxVBO);
+    glBindVertexArray(skyboxVAO);
+    glBindBuffer(GL_ARRAY_BUFFER, skyboxVBO);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(skyboxVertices), &skyboxVertices, GL_STATIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void *) 0);
+
+    // Încărcare texturi pentru skybox
+    std::vector<std::string> faces = {
+        "skybox/negx.jpg",
+        "skybox/negy.jpg",
+        "skybox/negz.jpg",
+        "skybox/posx.jpg",
+        "skybox/posy.jpg",
+        "skybox/posz.jpg"
+    };
+    cubemapTexture = loadCubemap(faces);
+
+    // Inițializare shader pentru skybox
+    skyboxShader.loadShader("shaders/skyboxShader.vert", "shaders/skyboxShader.frag");
+    skyboxShader.useShaderProgram();
+    glUniform1i(glGetUniformLocation(skyboxShader.shaderProgram, "skybox"), 0);
+}
+
+unsigned int loadCubemap(std::vector<std::string> faces) {
+    unsigned int textureID;
+    glGenTextures(1, &textureID);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, textureID);
+
+    int width, height, nrChannels;
+    for (unsigned int i = 0; i < faces.size(); i++) {
+        unsigned char *data = stbi_load(faces[i].c_str(), &width, &height, &nrChannels, 0);
+        if (data) {
+            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i,
+                         0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, data);
+            stbi_image_free(data);
+        } else {
+            std::cout << "Cubemap texture failed to load at path: " << faces[i] << std::endl;
+            stbi_image_free(data);
+        }
+    }
+
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+
+    return textureID;
+}
+
 glm::mat4 computeLightSpaceTrMatrix() {
     const GLfloat near_plane = 1.0f, far_plane = 10.0f;
     glm::mat4 lightProjection = glm::ortho(-10.0f, 10.0f, -10.0f, 10.0f, near_plane, far_plane);
 
     glm::vec3 lightDirRotated = glm::vec3(lightRotation * glm::vec4(lightDir, 0.0f));
-    glm::mat4 lightView = glm::lookAt(lightDirRotated * -2.0f,  // Light position
-                                     glm::vec3(0.0f),           // Look at origin
-                                     glm::vec3(0.0f, 1.0f, 0.0f)); // Up vector
+    glm::mat4 lightView = glm::lookAt(lightDirRotated * -2.0f, // Light position
+                                      glm::vec3(0.0f), // Look at origin
+                                      glm::vec3(0.0f, 1.0f, 0.0f)); // Up vector
 
     return lightProjection * lightView;
 }
@@ -382,12 +490,10 @@ void drawObjects(gps::Shader shader, bool depthPass) {
 }
 
 void renderScene() {
-    // 1. First render to depth map
     glViewport(0, 0, SHADOW_WIDTH, SHADOW_HEIGHT);
     glBindFramebuffer(GL_FRAMEBUFFER, shadowMapFBO);
     glClear(GL_DEPTH_BUFFER_BIT);
 
-    // Use custom shader for depth pass
     myCustomShader.useShaderProgram();
     glm::mat4 lightSpaceMatrix = computeLightSpaceTrMatrix();
     glUniformMatrix4fv(glGetUniformLocation(myCustomShader.shaderProgram, "lightSpaceTrMatrix"),
@@ -396,7 +502,6 @@ void renderScene() {
     drawObjects(myCustomShader, true);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-    // 2. Render scene normally with shadow mapping
     if (showDepthMap) {
         glViewport(0, 0, retina_width, retina_height);
         glClear(GL_COLOR_BUFFER_BIT);
@@ -415,7 +520,6 @@ void renderScene() {
 
         myCustomShader.useShaderProgram();
 
-        // Update view matrix and light direction
         view = myCamera.getViewMatrix();
         glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(view));
 
@@ -429,24 +533,38 @@ void renderScene() {
 
         // Send light space matrix to shader
         glUniformMatrix4fv(glGetUniformLocation(myCustomShader.shaderProgram, "lightSpaceTrMatrix"),
-                          1, GL_FALSE, glm::value_ptr(lightSpaceMatrix));
+                           1, GL_FALSE, glm::value_ptr(lightSpaceMatrix));
 
         drawObjects(myCustomShader, false);
 
         // Draw light cube
         lightShader.useShaderProgram();
         glUniformMatrix4fv(glGetUniformLocation(lightShader.shaderProgram, "view"),
-                          1, GL_FALSE, glm::value_ptr(view));
+                           1, GL_FALSE, glm::value_ptr(view));
 
         model = lightRotation;
         model = glm::translate(model, 1.0f * lightDir);
         model = glm::scale(model, glm::vec3(0.05f, 0.05f, 0.05f));
         glUniformMatrix4fv(glGetUniformLocation(lightShader.shaderProgram, "model"),
-                          1, GL_FALSE, glm::value_ptr(model));
+                           1, GL_FALSE, glm::value_ptr(model));
 
         lightCube.Draw(lightShader);
+        glDepthFunc(GL_LEQUAL);
+        skyboxShader.useShaderProgram();
+        view = glm::mat4(glm::mat3(myCamera.getViewMatrix())); // Remove translation
+        glUniformMatrix4fv(glGetUniformLocation(skyboxShader.shaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
+        glUniformMatrix4fv(glGetUniformLocation(skyboxShader.shaderProgram, "projection"), 1, GL_FALSE,
+                           glm::value_ptr(projection));
+
+        glBindVertexArray(skyboxVAO);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_CUBE_MAP, cubemapTexture);
+        glDrawArrays(GL_TRIANGLES, 0, 36);
+        glBindVertexArray(0);
+        glDepthFunc(GL_LESS);
     }
 }
+
 void cleanup() {
     glDeleteTextures(1, &depthMapTexture);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -467,6 +585,7 @@ int main(int argc, const char *argv[]) {
     initShaders();
     initUniforms();
     initFBO();
+    initSkybox();
 
     glCheckError();
 
