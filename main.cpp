@@ -51,6 +51,10 @@ GLuint lightDirLoc;
 glm::vec3 lightColor;
 GLuint lightColorLoc;
 
+glm::vec3 pointLightPos;
+GLuint pointLightPosLoc;
+glm::vec3 pointLightColor;
+GLuint pointLightColorLoc;
 
 gps::Camera myCamera(
     glm::vec3(0.0f, 2.0f, 5.5f),
@@ -243,6 +247,10 @@ void processMovement() {
     if (pressedKeys[GLFW_KEY_D]) {
         myCamera.move(gps::MOVE_RIGHT, cameraSpeed);
     }
+    // if (pressedKeys[GLFW_KEY_W] || pressedKeys[GLFW_KEY_S] || pressedKeys[GLFW_KEY_A] || pressedKeys[GLFW_KEY_D]) {
+    //     glm::vec3 cameraPos = myCamera.getCameraPosition();
+    //     printf("Camera position - X: %.2f, Y: %.2f, Z: %.2f\n", cameraPos.x, cameraPos.y, cameraPos.z);
+    // }
 }
 
 bool initOpenGLWindow() {
@@ -314,7 +322,7 @@ void initOpenGLState() {
 }
 
 void initObjects() {
-    std::string modelPath = "models/mirror-edge-bake_final.obj";
+    std::string modelPath = "models/mirror-edge.obj";
     std::cout << "Loading model from: " << modelPath << std::endl;
     map.LoadModel(modelPath);
 }
@@ -359,6 +367,15 @@ void initUniforms() {
     lightShader.useShaderProgram();
     glUniformMatrix4fv(glGetUniformLocation(lightShader.shaderProgram, "projection"), 1, GL_FALSE,
                        glm::value_ptr(projection));
+
+    pointLightPos = glm::vec3(-4.09f, 2.70f, 3.92f);
+    pointLightPosLoc = glGetUniformLocation(myCustomShader.shaderProgram, "pointLightPos");
+    glUniform3fv(pointLightPosLoc, 1, glm::value_ptr(pointLightPos));
+
+    pointLightColor = glm::vec3(1.0f, 1.0f, 1.0f); // white light
+    pointLightColorLoc = glGetUniformLocation(myCustomShader.shaderProgram, "pointLightColor");
+    glUniform3fv(pointLightColorLoc, 1, glm::value_ptr(pointLightColor));
+
 
     myCustomShader.useShaderProgram();
     glUniform3f(glGetUniformLocation(myCustomShader.shaderProgram, "ambientLight"), 0.2f, 0.2f, 0.2f);
@@ -534,6 +551,7 @@ void renderScene() {
         // Send light space matrix to shader
         glUniformMatrix4fv(glGetUniformLocation(myCustomShader.shaderProgram, "lightSpaceTrMatrix"),
                            1, GL_FALSE, glm::value_ptr(lightSpaceMatrix));
+        glUniform3fv(pointLightPosLoc, 1, glm::value_ptr(glm::vec3(view * glm::vec4(pointLightPos, 1.0))));
 
         drawObjects(myCustomShader, false);
 
