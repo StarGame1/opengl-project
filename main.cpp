@@ -60,6 +60,13 @@ float cameraSpeed = 0.01f;
 
 bool pressedKeys[1024];
 float angleY = 0.0f;
+
+float lastX = glWindowWidth / 2.0f;
+float lastY = glWindowHeight / 2.0f;
+float yaw = -90.0f;
+float pitch = 0.0f;
+bool firstMouse = true;
+
 GLfloat lightAngle;
 
 gps::Model3D map;
@@ -128,7 +135,31 @@ void keyboardCallback(GLFWwindow *window, int key, int scancode, int action, int
     }
 }
 
-void mouseCallback(GLFWwindow *window, double xpos, double ypos) {
+void mouseCallback(GLFWwindow* window, double xpos, double ypos) {
+    if (firstMouse) {
+        lastX = xpos;
+        lastY = ypos;
+        firstMouse = false;
+    }
+
+    float xoffset = xpos - lastX;
+    float yoffset = lastY - ypos;
+    lastX = xpos;
+    lastY = ypos;
+
+    float sensitivity = 0.1f;
+    xoffset *= sensitivity;
+    yoffset *= sensitivity;
+
+    yaw += xoffset;
+    pitch += yoffset;
+
+    if (pitch > 89.0f)
+        pitch = 89.0f;
+    if (pitch < -89.0f)
+        pitch = -89.0f;
+
+    myCamera.rotate(pitch, yaw);
 }
 
 void processMovement() {
@@ -196,7 +227,7 @@ bool initOpenGLWindow() {
     glfwSetWindowSizeCallback(glWindow, windowResizeCallback);
     glfwSetKeyCallback(glWindow, keyboardCallback);
     glfwSetCursorPosCallback(glWindow, mouseCallback);
-    //glfwSetInputMode(glWindow, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
+    glfwSetInputMode(glWindow, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
 
     glfwMakeContextCurrent(glWindow);
 
@@ -242,12 +273,6 @@ void initObjects() {
 void initShaders() {
     myCustomShader.loadShader("shaders/shader.vert", "shaders/shader.frag");
     myCustomShader.useShaderProgram();
-    // lightShader.loadShader("shaders/lightCube.vert", "shaders/lightCube.frag");
-    // lightShader.useShaderProgram();
-    // screenQuadShader.loadShader("shaders/screenQuad.vert", "shaders/screenQuad.frag");
-    // screenQuadShader.useShaderProgram();
-    // skyboxShader.loadShader("shaders/skyboxShader.vert", "shaders/skyboxShader.frag");
-    // skyboxShader.useShaderProgram();
 }
 
 void initUniforms() {
@@ -285,15 +310,6 @@ void initUniforms() {
                        glm::value_ptr(projection));
 }
 
-void initSkyBox() {
-    std::vector<const GLchar *> faces, faces2;
-    // faces.push_back("skybox/right.tga");
-    // faces.push_back("skybox/left.tga");
-    // faces.push_back("skybox/top.tga");
-    // faces.push_back("skybox/bottom.tga");
-    // faces.push_back("skybox/back.tga");
-    // faces.push_back("skybox/front.tga");
-}
 
 
 void initFBO() {
@@ -450,8 +466,8 @@ int main(int argc, const char *argv[]) {
     initObjects();
     initShaders();
     initUniforms();
-    initSkyBox();
     initFBO();
+
     glCheckError();
 
     while (!glfwWindowShouldClose(glWindow)) {
