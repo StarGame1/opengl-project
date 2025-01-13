@@ -15,7 +15,7 @@
 #endif
 
 #include <GLFW/glfw3.h>
-
+#include "RainSystem.hpp"
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/matrix_inverse.hpp>
@@ -32,6 +32,30 @@ int glWindowWidth = 800;
 int glWindowHeight = 600;
 int retina_width, retina_height;
 GLFWwindow *glWindow = NULL;
+
+enum RenderMode {
+    SOLID,
+    WIREFRAME,
+    POLYGONAL,
+    SMOOTH
+};
+
+RenderMode currentRenderMode = SOLID;
+
+gps::Shader rainShader;
+RainSystem rainSystem(20000); // 20000 de picături
+float lastFrame = 0.0f;
+
+
+const float WIND_MAX_STRENGTH = 2.0f;  // Mărește range-ul vântului
+
+
+bool fogEnabled = false;
+glm::vec3 fogColor = glm::vec3(0.5f, 0.5f, 0.5f);
+bool rainEnabled = false;
+float windStrength = 0.0f;
+glm::vec3 windDirection = glm::vec3(1.0f, 0.0f, 0.0f);
+
 
 const unsigned int SHADOW_WIDTH = 2048;
 const unsigned int SHADOW_HEIGHT = 2048;
@@ -166,7 +190,7 @@ void windowResizeCallback(GLFWwindow *window, int width, int height) {
 
     // Update viewport and projection matrix for new window dimensions
     glViewport(0, 0, retina_width, retina_height);
-    projection = glm::perspective(glm::radians(45.0f),
+    projection = glm::perspective(glm::radians(80.0f),
                                   (float) retina_width / (float) retina_height,
                                   0.1f, 1000.0f);
     myCustomShader.useShaderProgram();
@@ -180,6 +204,44 @@ void keyboardCallback(GLFWwindow *window, int key, int scancode, int action, int
     if (key == GLFW_KEY_M && action == GLFW_PRESS)
         showDepthMap = !showDepthMap;
 
+    // Controale pentru modurile de vizualizare
+    if (key == GLFW_KEY_1 && action == GLFW_PRESS) {
+        myCustomShader.useShaderProgram();
+        glUniform1i(glGetUniformLocation(myCustomShader.shaderProgram, "renderMode"), 0); // Solid
+        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+    }
+    if (key == GLFW_KEY_2 && action == GLFW_PRESS) {
+        myCustomShader.useShaderProgram();
+        glUniform1i(glGetUniformLocation(myCustomShader.shaderProgram, "renderMode"), 1); // Wireframe
+        glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+    }
+    if (key == GLFW_KEY_3 && action == GLFW_PRESS) {
+        myCustomShader.useShaderProgram();
+        glUniform1i(glGetUniformLocation(myCustomShader.shaderProgram, "renderMode"), 2); // Polygon
+        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+    }
+    if (key == GLFW_KEY_4 && action == GLFW_PRESS) {
+        myCustomShader.useShaderProgram();
+        glUniform1i(glGetUniformLocation(myCustomShader.shaderProgram, "renderMode"), 3); // Smooth
+        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+    }
+
+    if (key == GLFW_KEY_F && action == GLFW_PRESS) {
+        fogEnabled = !fogEnabled;
+        myCustomShader.useShaderProgram();
+        glUniform1i(glGetUniformLocation(myCustomShader.shaderProgram, "fogEnabled"), fogEnabled);
+    }
+
+    if (key == GLFW_KEY_R && action == GLFW_PRESS) {
+        rainSystem.toggle();
+    }
+
+    if (key == GLFW_KEY_V && action == GLFW_PRESS) {
+        windStrength = (windStrength == 0.0f) ? WIND_MAX_STRENGTH : 0.0f;
+        myCustomShader.useShaderProgram();
+        glUniform1f(glGetUniformLocation(myCustomShader.shaderProgram, "windStrength"), windStrength);
+    }
+
     if (key >= 0 && key < 1024) {
         if (action == GLFW_PRESS)
             pressedKeys[key] = true;
@@ -187,7 +249,6 @@ void keyboardCallback(GLFWwindow *window, int key, int scancode, int action, int
             pressedKeys[key] = false;
     }
 }
-
 void mouseCallback(GLFWwindow *window, double xpos, double ypos) {
     if (firstMouse) {
         lastX = xpos;
@@ -319,10 +380,11 @@ void initOpenGLState() {
     glFrontFace(GL_CCW); // GL_CCW for counter clock-wise
 
     glEnable(GL_FRAMEBUFFER_SRGB);
+    rainSystem.init();
 }
 
 void initObjects() {
-    std::string modelPath = "models/mirror-edge.obj";
+    std::string modelPath = "models/mirror.obj";
     std::cout << "Loading model from: " << modelPath << std::endl;
     map.LoadModel(modelPath);
 }
@@ -332,10 +394,16 @@ void initShaders() {
     myCustomShader.useShaderProgram();
     skyboxShader.loadShader("shaders/skyboxShader.vert", "shaders/skyboxShader.frag");
     skyboxShader.useShaderProgram();
+     rainShader.loadShader("shaders/rain.vert", "shaders/rain.frag");
 }
 
 void initUniforms() {
     myCustomShader.useShaderProgram();
+
+    glUniform1f(glGetUniformLocation(myCustomShader.shaderProgram, "roughness"), 0.5f);
+    glUniform1f(glGetUniformLocation(myCustomShader.shaderProgram, "metallic"), 0.0f);
+    glUniform1f(glGetUniformLocation(myCustomShader.shaderProgram, "ao"), 1.0f);
+
 
     model = glm::mat4(1.0f);
     modelLoc = glGetUniformLocation(myCustomShader.shaderProgram, "model");
@@ -360,7 +428,7 @@ void initUniforms() {
     glUniform3fv(lightDirLoc, 1, glm::value_ptr(glm::inverseTranspose(glm::mat3(view * lightRotation)) * lightDir));
 
     //set light color
-    lightColor = glm::vec3(1.0f, 1.0f, 1.0f); //white light
+    lightColor = glm::vec3(1.0f, 0.95f, 0.8f); //white light
     lightColorLoc = glGetUniformLocation(myCustomShader.shaderProgram, "lightColor");
     glUniform3fv(lightColorLoc, 1, glm::value_ptr(lightColor));
 
@@ -368,18 +436,25 @@ void initUniforms() {
     glUniformMatrix4fv(glGetUniformLocation(lightShader.shaderProgram, "projection"), 1, GL_FALSE,
                        glm::value_ptr(projection));
 
-    pointLightPos = glm::vec3(-4.09f, 2.70f, 3.92f);
+    pointLightPos = glm::vec3(0.8f, 0.8f, 1.0f);
     pointLightPosLoc = glGetUniformLocation(myCustomShader.shaderProgram, "pointLightPos");
     glUniform3fv(pointLightPosLoc, 1, glm::value_ptr(pointLightPos));
 
-    pointLightColor = glm::vec3(1.0f, 1.0f, 1.0f); // white light
+    pointLightColor = glm::vec3(2.0f, 1.9f, 1.7f); // white light
     pointLightColorLoc = glGetUniformLocation(myCustomShader.shaderProgram, "pointLightColor");
     glUniform3fv(pointLightColorLoc, 1, glm::value_ptr(pointLightColor));
 
 
     myCustomShader.useShaderProgram();
     glUniform3f(glGetUniformLocation(myCustomShader.shaderProgram, "ambientLight"), 0.2f, 0.2f, 0.2f);
-    glUniform1f(glGetUniformLocation(myCustomShader.shaderProgram, "ambientStrength"), 0.2f);
+    glUniform1f(glGetUniformLocation(myCustomShader.shaderProgram, "ambientStrength"), 0.1f);
+     myCustomShader.useShaderProgram();
+    glUniform1i(glGetUniformLocation(myCustomShader.shaderProgram, "fogEnabled"), fogEnabled);
+    glUniform3fv(glGetUniformLocation(myCustomShader.shaderProgram, "fogColor"), 1, glm::value_ptr(fogColor));
+    glUniform1i(glGetUniformLocation(myCustomShader.shaderProgram, "rainEnabled"), rainEnabled);
+    glUniform1f(glGetUniformLocation(myCustomShader.shaderProgram, "windStrength"), windStrength);
+    glUniform3fv(glGetUniformLocation(myCustomShader.shaderProgram, "windDirection"), 1, glm::value_ptr(windDirection));
+
 }
 
 
@@ -507,6 +582,7 @@ void drawObjects(gps::Shader shader, bool depthPass) {
 }
 
 void renderScene() {
+    // First pass: render to depth map
     glViewport(0, 0, SHADOW_WIDTH, SHADOW_HEIGHT);
     glBindFramebuffer(GL_FRAMEBUFFER, shadowMapFBO);
     glClear(GL_DEPTH_BUFFER_BIT);
@@ -531,17 +607,39 @@ void renderScene() {
         glDisable(GL_DEPTH_TEST);
         screenQuad.Draw(screenQuadShader);
         glEnable(GL_DEPTH_TEST);
-    } else {
+    }
+    else {
+        // Second pass: render scene normally
         glViewport(0, 0, retina_width, retina_height);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         myCustomShader.useShaderProgram();
 
+        // Update view matrix
         view = myCamera.getViewMatrix();
         glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(view));
 
+        // Update light
         lightRotation = glm::rotate(glm::mat4(1.0f), glm::radians(lightAngle), glm::vec3(0.0f, 1.0f, 0.0f));
         glUniform3fv(lightDirLoc, 1, glm::value_ptr(glm::inverseTranspose(glm::mat3(view * lightRotation)) * lightDir));
+
+        // Update time for animations
+        float currentTime = glfwGetTime();
+        float deltaTime = currentTime - lastFrame;
+        lastFrame = currentTime;
+
+        // Update uniforms
+        glUniform1f(glGetUniformLocation(myCustomShader.shaderProgram, "time"), currentTime);
+
+        // Update effect uniforms if they've changed
+        if (fogEnabled) {
+            glUniform1i(glGetUniformLocation(myCustomShader.shaderProgram, "fogEnabled"), fogEnabled);
+            glUniform3fv(glGetUniformLocation(myCustomShader.shaderProgram, "fogColor"), 1, glm::value_ptr(fogColor));
+        }
+
+        // Update wind
+        glUniform1f(glGetUniformLocation(myCustomShader.shaderProgram, "windStrength"), windStrength);
+        glUniform3fv(glGetUniformLocation(myCustomShader.shaderProgram, "windDirection"), 1, glm::value_ptr(windDirection));
 
         // Bind shadow map
         glActiveTexture(GL_TEXTURE3);
@@ -553,6 +651,7 @@ void renderScene() {
                            1, GL_FALSE, glm::value_ptr(lightSpaceMatrix));
         glUniform3fv(pointLightPosLoc, 1, glm::value_ptr(glm::vec3(view * glm::vec4(pointLightPos, 1.0))));
 
+        // Draw scene objects
         drawObjects(myCustomShader, false);
 
         // Draw light cube
@@ -567,6 +666,26 @@ void renderScene() {
                            1, GL_FALSE, glm::value_ptr(model));
 
         lightCube.Draw(lightShader);
+
+        // Draw rain if enabled
+        if (rainSystem.isEnabled()) {
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+            rainSystem.update(deltaTime);
+
+            rainShader.useShaderProgram();
+            glUniformMatrix4fv(glGetUniformLocation(rainShader.shaderProgram, "projection"),
+                              1, GL_FALSE, glm::value_ptr(projection));
+            glUniformMatrix4fv(glGetUniformLocation(rainShader.shaderProgram, "view"),
+                              1, GL_FALSE, glm::value_ptr(view));
+
+            rainSystem.draw(rainShader);
+
+            glDisable(GL_BLEND);
+        }
+
+        // Draw skybox
         glDepthFunc(GL_LEQUAL);
         skyboxShader.useShaderProgram();
         view = glm::mat4(glm::mat3(myCamera.getViewMatrix())); // Remove translation
@@ -580,9 +699,11 @@ void renderScene() {
         glDrawArrays(GL_TRIANGLES, 0, 36);
         glBindVertexArray(0);
         glDepthFunc(GL_LESS);
+
+        // Restore normal polygon mode after frame is rendered
+        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     }
 }
-
 void cleanup() {
     glDeleteTextures(1, &depthMapTexture);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
