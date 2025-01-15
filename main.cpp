@@ -8,6 +8,7 @@
 
 #if defined (__APPLE__)
 #define GLFW_INCLUDE_GLCOREARB
+
 #define GL_SILENCE_DEPRECATION
 #else
 #define GLEW_STATIC
@@ -46,6 +47,33 @@ gps::Shader rainShader;
 RainSystem rainSystem(20000); // 20000 de picături
 float lastFrame = 0.0f;
 
+glm::vec3 pointLightPos = glm::vec3(-0.10f, 7.59f, 3.23f);
+float pointLightMovementSpeed = 0.1f;
+
+// Add these variables at the top of main.cpp with other global variables
+bool firstMouse = true;
+float yaw = -90.0f;
+float pitch = 0.0f;
+
+float currentYaw = 0.0f;
+float currentPitch = 0.0f;
+
+
+// Valorile fixe pentru rotație
+float startYaw = -20.0f;    // Modifică aceste valori cu cele dorite
+float startPitch = 10.0f;    // pentru poziția de start
+float endYaw = -250.0f;       // și pentru poziția finală
+float endPitch = 0.0f;
+
+// Camera animation variables
+bool isAnimating = false;
+float animationTime = 0.0f;
+const float ANIMATION_DURATION = 10.0f; // Animation will take 2 seconds
+
+glm::vec3 startPosition(8.91f, 1.56f, -6.35f);
+glm::vec3 endPosition(-0.96f, 2.52f, -3.24f);
+
+
 
 const float WIND_MAX_STRENGTH = 2.0f;  // Mărește range-ul vântului
 
@@ -75,7 +103,6 @@ GLuint lightDirLoc;
 glm::vec3 lightColor;
 GLuint lightColorLoc;
 
-glm::vec3 pointLightPos;
 GLuint pointLightPosLoc;
 glm::vec3 pointLightColor;
 GLuint pointLightColorLoc;
@@ -94,9 +121,9 @@ float angleY = 0.0f;
 
 float lastX = glWindowWidth / 2.0f;
 float lastY = glWindowHeight / 2.0f;
-float yaw = -90.0f;
-float pitch = 0.0f;
-bool firstMouse = true;
+// float yaw = -90.0f;
+// float pitch = 0.0f;
+// bool firstMouse = true;
 
 GLfloat lightAngle;
 
@@ -197,32 +224,57 @@ void windowResizeCallback(GLFWwindow *window, int width, int height) {
     glUniformMatrix4fv(projectionLoc, 1, GL_FALSE, glm::value_ptr(projection));
 }
 
-void keyboardCallback(GLFWwindow *window, int key, int scancode, int action, int mode) {
+// Update the keyboard callback function
+void keyboardCallback(GLFWwindow* window, int key, int scancode, int action, int mode) {
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS)
         glfwSetWindowShouldClose(window, GL_TRUE);
 
     if (key == GLFW_KEY_M && action == GLFW_PRESS)
         showDepthMap = !showDepthMap;
 
+    if (key == GLFW_KEY_H && action == GLFW_PRESS) {
+        isAnimating = true;
+        animationTime = 0.0f;
+
+        // Force the initial values
+        yaw = startYaw;
+        pitch = startPitch;
+
+        // Debug print
+        printf("Starting animation with yaw=%.2f, pitch=%.2f\n", yaw, pitch);
+
+        glm::vec3 direction;
+        direction.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
+        direction.y = sin(glm::radians(pitch));
+        direction.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
+        direction = glm::normalize(direction);
+
+        myCamera = gps::Camera(
+            startPosition,
+            startPosition + direction,
+            glm::vec3(0.0f, 1.0f, 0.0f)
+        );
+    }
+
     // Controale pentru modurile de vizualizare
     if (key == GLFW_KEY_1 && action == GLFW_PRESS) {
         myCustomShader.useShaderProgram();
-        glUniform1i(glGetUniformLocation(myCustomShader.shaderProgram, "renderMode"), 0); // Solid
+        glUniform1i(glGetUniformLocation(myCustomShader.shaderProgram, "renderMode"), 0);
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     }
     if (key == GLFW_KEY_2 && action == GLFW_PRESS) {
         myCustomShader.useShaderProgram();
-        glUniform1i(glGetUniformLocation(myCustomShader.shaderProgram, "renderMode"), 1); // Wireframe
+        glUniform1i(glGetUniformLocation(myCustomShader.shaderProgram, "renderMode"), 1);
         glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
     }
     if (key == GLFW_KEY_3 && action == GLFW_PRESS) {
         myCustomShader.useShaderProgram();
-        glUniform1i(glGetUniformLocation(myCustomShader.shaderProgram, "renderMode"), 2); // Polygon
+        glUniform1i(glGetUniformLocation(myCustomShader.shaderProgram, "renderMode"), 2);
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     }
     if (key == GLFW_KEY_4 && action == GLFW_PRESS) {
         myCustomShader.useShaderProgram();
-        glUniform1i(glGetUniformLocation(myCustomShader.shaderProgram, "renderMode"), 3); // Smooth
+        glUniform1i(glGetUniformLocation(myCustomShader.shaderProgram, "renderMode"), 3);
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     }
 
@@ -308,10 +360,38 @@ void processMovement() {
     if (pressedKeys[GLFW_KEY_D]) {
         myCamera.move(gps::MOVE_RIGHT, cameraSpeed);
     }
-    // if (pressedKeys[GLFW_KEY_W] || pressedKeys[GLFW_KEY_S] || pressedKeys[GLFW_KEY_A] || pressedKeys[GLFW_KEY_D]) {
-    //     glm::vec3 cameraPos = myCamera.getCameraPosition();
-    //     printf("Camera position - X: %.2f, Y: %.2f, Z: %.2f\n", cameraPos.x, cameraPos.y, cameraPos.z);
-    // }
+    if (pressedKeys[GLFW_KEY_W] || pressedKeys[GLFW_KEY_S] || pressedKeys[GLFW_KEY_A] || pressedKeys[GLFW_KEY_D]) {
+        glm::vec3 cameraPos = myCamera.getCameraPosition();
+        printf("Camera position - X: %.2f, Y: %.2f, Z: %.2f\n", cameraPos.x, cameraPos.y, cameraPos.z);
+        if (pressedKeys[GLFW_KEY_UP]) {
+            pointLightPos.z -= pointLightMovementSpeed;
+            printf("Light pos: X=%.2f, Y=%.2f, Z=%.2f\n", pointLightPos.x, pointLightPos.y, pointLightPos.z);
+        }
+        if (pressedKeys[GLFW_KEY_DOWN]) {
+            pointLightPos.z += pointLightMovementSpeed;
+            printf("Light pos: X=%.2f, Y=%.2f, Z=%.2f\n", pointLightPos.x, pointLightPos.y, pointLightPos.z);
+        }
+        if (pressedKeys[GLFW_KEY_LEFT]) {
+            pointLightPos.x -= pointLightMovementSpeed;
+            printf("Light pos: X=%.2f, Y=%.2f, Z=%.2f\n", pointLightPos.x, pointLightPos.y, pointLightPos.z);
+        }
+        if (pressedKeys[GLFW_KEY_RIGHT]) {
+            pointLightPos.x += pointLightMovementSpeed;
+            printf("Light pos: X=%.2f, Y=%.2f, Z=%.2f\n", pointLightPos.x, pointLightPos.y, pointLightPos.z);
+        }
+        if (pressedKeys[GLFW_KEY_PAGE_UP]) {
+            pointLightPos.y += pointLightMovementSpeed;
+            printf("Light pos: X=%.2f, Y=%.2f, Z=%.2f\n", pointLightPos.x, pointLightPos.y, pointLightPos.z);
+        }
+        if (pressedKeys[GLFW_KEY_PAGE_DOWN]) {
+            pointLightPos.y -= pointLightMovementSpeed;
+            printf("Light pos: X=%.2f, Y=%.2f, Z=%.2f\n", pointLightPos.x, pointLightPos.y, pointLightPos.z);
+        }
+
+        // Update light position in shader
+        myCustomShader.useShaderProgram();
+        glUniform3fv(pointLightPosLoc, 1, glm::value_ptr(pointLightPos));
+    }
 }
 
 bool initOpenGLWindow() {
@@ -400,24 +480,34 @@ void initShaders() {
 void initUniforms() {
     myCustomShader.useShaderProgram();
 
-    glUniform1f(glGetUniformLocation(myCustomShader.shaderProgram, "roughness"), 0.5f);
+    // Set PBR parameters
     glUniform1f(glGetUniformLocation(myCustomShader.shaderProgram, "metallic"), 0.0f);
+    glUniform1f(glGetUniformLocation(myCustomShader.shaderProgram, "roughness"), 0.5f);
     glUniform1f(glGetUniformLocation(myCustomShader.shaderProgram, "ao"), 1.0f);
 
+    // Set visual enhancement parameters
+    glUniform1f(glGetUniformLocation(myCustomShader.shaderProgram, "exposure"), 15.0f);
+    glUniform1f(glGetUniformLocation(myCustomShader.shaderProgram, "saturation"), 1.5f);
+    glUniform1f(glGetUniformLocation(myCustomShader.shaderProgram, "contrast"), 1.5f);
 
+
+    // Model matrix
     model = glm::mat4(1.0f);
     modelLoc = glGetUniformLocation(myCustomShader.shaderProgram, "model");
     glUniformMatrix4fv(modelLoc, 1, GL_FALSE, glm::value_ptr(model));
 
+    // View matrix
     view = myCamera.getViewMatrix();
     viewLoc = glGetUniformLocation(myCustomShader.shaderProgram, "view");
     glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(view));
 
+    // Normal matrix
     normalMatrix = glm::mat3(glm::inverseTranspose(view * model));
     normalMatrixLoc = glGetUniformLocation(myCustomShader.shaderProgram, "normalMatrix");
     glUniformMatrix3fv(normalMatrixLoc, 1, GL_FALSE, glm::value_ptr(normalMatrix));
 
-    projection = glm::perspective(glm::radians(45.0f), (float) retina_width / (float) retina_height, 0.1f, 1000.0f);
+    // Create projection matrix
+    projection = glm::perspective(glm::radians(60.0f), (float)retina_width / (float)retina_height, 0.1f, 1000.0f);
     projectionLoc = glGetUniformLocation(myCustomShader.shaderProgram, "projection");
     glUniformMatrix4fv(projectionLoc, 1, GL_FALSE, glm::value_ptr(projection));
 
@@ -428,35 +518,22 @@ void initUniforms() {
     glUniform3fv(lightDirLoc, 1, glm::value_ptr(glm::inverseTranspose(glm::mat3(view * lightRotation)) * lightDir));
 
     //set light color
-    lightColor = glm::vec3(1.0f, 0.95f, 0.8f); //white light
+    lightColor = glm::vec3(1.0f, 1.0f, 1.0f); //white light
     lightColorLoc = glGetUniformLocation(myCustomShader.shaderProgram, "lightColor");
     glUniform3fv(lightColorLoc, 1, glm::value_ptr(lightColor));
 
-    lightShader.useShaderProgram();
-    glUniformMatrix4fv(glGetUniformLocation(lightShader.shaderProgram, "projection"), 1, GL_FALSE,
-                       glm::value_ptr(projection));
-
-    pointLightPos = glm::vec3(0.8f, 0.8f, 1.0f);
+    // Point light setup
+    pointLightPos = glm::vec3(-0.10f, 7.59f, 3.23f);
     pointLightPosLoc = glGetUniformLocation(myCustomShader.shaderProgram, "pointLightPos");
     glUniform3fv(pointLightPosLoc, 1, glm::value_ptr(pointLightPos));
 
-    pointLightColor = glm::vec3(2.0f, 1.9f, 1.7f); // white light
+    pointLightColor = glm::vec3(1.0f, 0.95f, 0.8f); // Warm white light
     pointLightColorLoc = glGetUniformLocation(myCustomShader.shaderProgram, "pointLightColor");
     glUniform3fv(pointLightColorLoc, 1, glm::value_ptr(pointLightColor));
 
-
-    myCustomShader.useShaderProgram();
-    glUniform3f(glGetUniformLocation(myCustomShader.shaderProgram, "ambientLight"), 0.2f, 0.2f, 0.2f);
-    glUniform1f(glGetUniformLocation(myCustomShader.shaderProgram, "ambientStrength"), 0.1f);
-     myCustomShader.useShaderProgram();
-    glUniform1i(glGetUniformLocation(myCustomShader.shaderProgram, "fogEnabled"), fogEnabled);
-    glUniform3fv(glGetUniformLocation(myCustomShader.shaderProgram, "fogColor"), 1, glm::value_ptr(fogColor));
-    glUniform1i(glGetUniformLocation(myCustomShader.shaderProgram, "rainEnabled"), rainEnabled);
-    glUniform1f(glGetUniformLocation(myCustomShader.shaderProgram, "windStrength"), windStrength);
-    glUniform3fv(glGetUniformLocation(myCustomShader.shaderProgram, "windDirection"), 1, glm::value_ptr(windDirection));
-
+    // Set point light intensity
+    glUniform1f(glGetUniformLocation(myCustomShader.shaderProgram, "pointLightIntensity"), 50.0f);
 }
-
 
 void initFBO() {
     // Create the FBO for depth map
@@ -582,6 +659,42 @@ void drawObjects(gps::Shader shader, bool depthPass) {
 }
 
 void renderScene() {
+    float currentTime = glfwGetTime();
+    float deltaTime = currentTime - lastFrame;
+    lastFrame = currentTime;
+
+    //În renderScene, în secțiunea de animație, adaugă print-uri:
+    if (isAnimating) {
+        animationTime += deltaTime;
+        float t = glm::clamp(animationTime / ANIMATION_DURATION, 0.0f, 1.0f);
+        float smoothT = (1.0f - cos(t * glm::pi<float>())) * 0.5f;
+
+        glm::vec3 newPosition = glm::mix(startPosition, endPosition, smoothT);
+
+        // Debug print
+        float interpolatedYaw = glm::mix(startYaw, endYaw, smoothT);
+        printf("Animation: t=%.2f, interpolatedYaw=%.2f\n", smoothT, interpolatedYaw);
+
+        yaw = interpolatedYaw;
+        pitch = glm::mix(startPitch, endPitch, smoothT);
+
+        glm::vec3 direction;
+        direction.x = cos(glm::radians(yaw)) * cos(glm::radians(pitch));
+        direction.y = sin(glm::radians(pitch));
+        direction.z = sin(glm::radians(yaw)) * cos(glm::radians(pitch));
+        direction = glm::normalize(direction);
+
+        myCamera = gps::Camera(
+            newPosition,
+            newPosition + direction,
+            glm::vec3(0.0f, 1.0f, 0.0f)
+        );
+
+        if (t >= 1.0f) {
+            isAnimating = false;
+        }
+    }
+
     // First pass: render to depth map
     glViewport(0, 0, SHADOW_WIDTH, SHADOW_HEIGHT);
     glBindFramebuffer(GL_FRAMEBUFFER, shadowMapFBO);
@@ -623,11 +736,6 @@ void renderScene() {
         lightRotation = glm::rotate(glm::mat4(1.0f), glm::radians(lightAngle), glm::vec3(0.0f, 1.0f, 0.0f));
         glUniform3fv(lightDirLoc, 1, glm::value_ptr(glm::inverseTranspose(glm::mat3(view * lightRotation)) * lightDir));
 
-        // Update time for animations
-        float currentTime = glfwGetTime();
-        float deltaTime = currentTime - lastFrame;
-        lastFrame = currentTime;
-
         // Update uniforms
         glUniform1f(glGetUniformLocation(myCustomShader.shaderProgram, "time"), currentTime);
 
@@ -649,18 +757,30 @@ void renderScene() {
         // Send light space matrix to shader
         glUniformMatrix4fv(glGetUniformLocation(myCustomShader.shaderProgram, "lightSpaceTrMatrix"),
                            1, GL_FALSE, glm::value_ptr(lightSpaceMatrix));
-        glUniform3fv(pointLightPosLoc, 1, glm::value_ptr(glm::vec3(view * glm::vec4(pointLightPos, 1.0))));
+
+        // Update point light position in view space
+        glm::vec3 pointLightPosView = glm::vec3(view * glm::vec4(pointLightPos, 1.0));
+        glUniform3fv(pointLightPosLoc, 1, glm::value_ptr(pointLightPosView));
 
         // Draw scene objects
         drawObjects(myCustomShader, false);
 
-        // Draw light cube
+        // Draw light cube for directional light
         lightShader.useShaderProgram();
         glUniformMatrix4fv(glGetUniformLocation(lightShader.shaderProgram, "view"),
                            1, GL_FALSE, glm::value_ptr(view));
 
         model = lightRotation;
         model = glm::translate(model, 1.0f * lightDir);
+        model = glm::scale(model, glm::vec3(0.05f, 0.05f, 0.05f));
+        glUniformMatrix4fv(glGetUniformLocation(lightShader.shaderProgram, "model"),
+                           1, GL_FALSE, glm::value_ptr(model));
+
+        lightCube.Draw(lightShader);
+
+        // Draw light cube for point light
+        model = glm::mat4(1.0f);
+        model = glm::translate(model, pointLightPos);
         model = glm::scale(model, glm::vec3(0.05f, 0.05f, 0.05f));
         glUniformMatrix4fv(glGetUniformLocation(lightShader.shaderProgram, "model"),
                            1, GL_FALSE, glm::value_ptr(model));
