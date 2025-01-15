@@ -21,6 +21,9 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/matrix_inverse.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <iostream>
+#include <fstream>
+#include <vector>
 
 #include "Shader.hpp"
 #include "Model3D.hpp"
@@ -29,10 +32,22 @@
 #include <iostream>
 
 
-int glWindowWidth = 800;
-int glWindowHeight = 600;
+
+int glWindowWidth = 1920;
+int glWindowHeight = 1080;
 int retina_width, retina_height;
 GLFWwindow *glWindow = NULL;
+
+GLuint motionBlurFBO, motionBlurTexture;
+gps::Shader motionBlurShader;
+unsigned int quadVAO = 0;
+unsigned int quadVBO;
+
+GLuint postProcessFBO, postProcessTexture;
+GLuint velocityFBO, velocityTexture;
+gps::Shader fxaaShader;
+
+glm::mat4 previousViewProjection;
 
 enum RenderMode {
     SOLID,
@@ -184,6 +199,32 @@ float skyboxVertices[] = {
     1.0f, -1.0f, 1.0f
 };
 bool showDepthMap;
+
+
+void renderQuad() {
+    if (quadVAO == 0) {
+        float quadVertices[] = {
+            // positions        // texture Coords
+            -1.0f,  1.0f, 0.0f, 0.0f, 1.0f,
+            -1.0f, -1.0f, 0.0f, 0.0f, 0.0f,
+             1.0f,  1.0f, 0.0f, 1.0f, 1.0f,
+             1.0f, -1.0f, 0.0f, 1.0f, 0.0f,
+        };
+
+        glGenVertexArrays(1, &quadVAO);
+        glGenBuffers(1, &quadVBO);
+        glBindVertexArray(quadVAO);
+        glBindBuffer(GL_ARRAY_BUFFER, quadVBO);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(quadVertices), &quadVertices, GL_STATIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(3 * sizeof(float)));
+    }
+    glBindVertexArray(quadVAO);
+    glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    glBindVertexArray(0);
+}
 
 unsigned int loadCubemap(std::vector<std::string>);
 
@@ -475,6 +516,9 @@ void initShaders() {
     skyboxShader.loadShader("shaders/skyboxShader.vert", "shaders/skyboxShader.frag");
     skyboxShader.useShaderProgram();
      rainShader.loadShader("shaders/rain.vert", "shaders/rain.frag");
+    fxaaShader.loadShader("shaders/fxaa.vert", "shaders/fxaa.frag");
+    motionBlurShader.loadShader("shaders/motionBlur.vert", "shaders/motionBlur.frag");
+
 }
 
 void initUniforms() {
@@ -557,10 +601,26 @@ void initFBO() {
     glDrawBuffer(GL_NONE);
     glReadBuffer(GL_NONE);
 
-    // Check if framebuffer is complete
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+    // Create motion blur FBO and texture
+    glGenFramebuffers(1, &motionBlurFBO);
+    glBindFramebuffer(GL_FRAMEBUFFER, motionBlurFBO);
+
+    glGenTextures(1, &motionBlurTexture);
+    glBindTexture(GL_TEXTURE_2D, motionBlurTexture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, retina_width, retina_height, 0, GL_RGB, GL_UNSIGNED_BYTE, NULL);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, motionBlurTexture, 0);
+
+    // Create and attach depth buffer for motion blur
+    unsigned int rboDepth;
+    glGenRenderbuffers(1, &rboDepth);
+    glBindRenderbuffer(GL_RENDERBUFFER, rboDepth);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, retina_width, retina_height);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rboDepth);
+
+    if(glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
         std::cout << "Framebuffer not complete!" << std::endl;
-    }
 
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
@@ -663,18 +723,18 @@ void renderScene() {
     float deltaTime = currentTime - lastFrame;
     lastFrame = currentTime;
 
-    //În renderScene, în secțiunea de animație, adaugă print-uri:
+    // First render pass (render to motion blur FBO)
+    glBindFramebuffer(GL_FRAMEBUFFER, motionBlurFBO);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    // Animation code
     if (isAnimating) {
         animationTime += deltaTime;
         float t = glm::clamp(animationTime / ANIMATION_DURATION, 0.0f, 1.0f);
         float smoothT = (1.0f - cos(t * glm::pi<float>())) * 0.5f;
 
         glm::vec3 newPosition = glm::mix(startPosition, endPosition, smoothT);
-
-        // Debug print
         float interpolatedYaw = glm::mix(startYaw, endYaw, smoothT);
-        printf("Animation: t=%.2f, interpolatedYaw=%.2f\n", smoothT, interpolatedYaw);
-
         yaw = interpolatedYaw;
         pitch = glm::mix(startPitch, endPitch, smoothT);
 
@@ -695,7 +755,7 @@ void renderScene() {
         }
     }
 
-    // First pass: render to depth map
+    // Shadow mapping pass
     glViewport(0, 0, SHADOW_WIDTH, SHADOW_HEIGHT);
     glBindFramebuffer(GL_FRAMEBUFFER, shadowMapFBO);
     glClear(GL_DEPTH_BUFFER_BIT);
@@ -706,129 +766,122 @@ void renderScene() {
                        1, GL_FALSE, glm::value_ptr(lightSpaceMatrix));
 
     drawObjects(myCustomShader, true);
+
+    // Main rendering pass
+    glViewport(0, 0, retina_width, retina_height);
+    glBindFramebuffer(GL_FRAMEBUFFER, motionBlurFBO);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    myCustomShader.useShaderProgram();
+    view = myCamera.getViewMatrix();
+    glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(view));
+
+    lightRotation = glm::rotate(glm::mat4(1.0f), glm::radians(lightAngle), glm::vec3(0.0f, 1.0f, 0.0f));
+    glUniform3fv(lightDirLoc, 1, glm::value_ptr(glm::inverseTranspose(glm::mat3(view * lightRotation)) * lightDir));
+
+    // Update all your regular uniforms
+    glUniform1f(glGetUniformLocation(myCustomShader.shaderProgram, "time"), currentTime);
+
+    if (fogEnabled) {
+        glUniform1i(glGetUniformLocation(myCustomShader.shaderProgram, "fogEnabled"), fogEnabled);
+        glUniform3fv(glGetUniformLocation(myCustomShader.shaderProgram, "fogColor"), 1, glm::value_ptr(fogColor));
+    }
+
+    glUniform1f(glGetUniformLocation(myCustomShader.shaderProgram, "windStrength"), windStrength);
+    glUniform3fv(glGetUniformLocation(myCustomShader.shaderProgram, "windDirection"), 1, glm::value_ptr(windDirection));
+
+    // Bind shadow map
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_2D, depthMapTexture);
+    glUniform1i(glGetUniformLocation(myCustomShader.shaderProgram, "shadowMap"), 3);
+
+    glUniformMatrix4fv(glGetUniformLocation(myCustomShader.shaderProgram, "lightSpaceTrMatrix"),
+                       1, GL_FALSE, glm::value_ptr(lightSpaceMatrix));
+
+    // Update point light
+    glm::vec3 pointLightPosView = glm::vec3(view * glm::vec4(pointLightPos, 1.0));
+    glUniform3fv(pointLightPosLoc, 1, glm::value_ptr(pointLightPosView));
+
+    // Draw scene
+    drawObjects(myCustomShader, false);
+
+    // Draw lights
+    lightShader.useShaderProgram();
+    glUniformMatrix4fv(glGetUniformLocation(lightShader.shaderProgram, "view"),
+                       1, GL_FALSE, glm::value_ptr(view));
+
+    // Draw directional light cube
+    model = lightRotation;
+    model = glm::translate(model, 1.0f * lightDir);
+    model = glm::scale(model, glm::vec3(0.05f, 0.05f, 0.05f));
+    glUniformMatrix4fv(glGetUniformLocation(lightShader.shaderProgram, "model"),
+                       1, GL_FALSE, glm::value_ptr(model));
+    lightCube.Draw(lightShader);
+
+    // Draw point light cube
+    model = glm::mat4(1.0f);
+    model = glm::translate(model, pointLightPos);
+    model = glm::scale(model, glm::vec3(0.05f, 0.05f, 0.05f));
+    glUniformMatrix4fv(glGetUniformLocation(lightShader.shaderProgram, "model"),
+                       1, GL_FALSE, glm::value_ptr(model));
+    lightCube.Draw(lightShader);
+
+    // Draw rain
+    if (rainSystem.isEnabled()) {
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+        rainSystem.update(deltaTime);
+        rainShader.useShaderProgram();
+        glUniformMatrix4fv(glGetUniformLocation(rainShader.shaderProgram, "projection"),
+                          1, GL_FALSE, glm::value_ptr(projection));
+        glUniformMatrix4fv(glGetUniformLocation(rainShader.shaderProgram, "view"),
+                          1, GL_FALSE, glm::value_ptr(view));
+        rainSystem.draw(rainShader);
+
+        glDisable(GL_BLEND);
+    }
+
+    // Draw skybox
+    glDepthFunc(GL_LEQUAL);
+    skyboxShader.useShaderProgram();
+    view = glm::mat4(glm::mat3(myCamera.getViewMatrix()));
+    glUniformMatrix4fv(glGetUniformLocation(skyboxShader.shaderProgram, "view"),
+                       1, GL_FALSE, glm::value_ptr(view));
+    glUniformMatrix4fv(glGetUniformLocation(skyboxShader.shaderProgram, "projection"),
+                       1, GL_FALSE, glm::value_ptr(projection));
+
+    glBindVertexArray(skyboxVAO);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, cubemapTexture);
+    glDrawArrays(GL_TRIANGLES, 0, 36);
+    glBindVertexArray(0);
+    glDepthFunc(GL_LESS);
+
+    // Final pass: render to screen with motion blur
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    if (showDepthMap) {
-        glViewport(0, 0, retina_width, retina_height);
-        glClear(GL_COLOR_BUFFER_BIT);
+    motionBlurShader.useShaderProgram();
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, motionBlurTexture);
+    glUniform1i(glGetUniformLocation(motionBlurShader.shaderProgram, "screenTexture"), 0);
 
-        screenQuadShader.useShaderProgram();
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, depthMapTexture);
-        glUniform1i(glGetUniformLocation(screenQuadShader.shaderProgram, "depthMap"), 0);
+    renderQuad();
 
-        glDisable(GL_DEPTH_TEST);
-        screenQuad.Draw(screenQuadShader);
-        glEnable(GL_DEPTH_TEST);
-    }
-    else {
-        // Second pass: render scene normally
-        glViewport(0, 0, retina_width, retina_height);
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
-        myCustomShader.useShaderProgram();
-
-        // Update view matrix
-        view = myCamera.getViewMatrix();
-        glUniformMatrix4fv(viewLoc, 1, GL_FALSE, glm::value_ptr(view));
-
-        // Update light
-        lightRotation = glm::rotate(glm::mat4(1.0f), glm::radians(lightAngle), glm::vec3(0.0f, 1.0f, 0.0f));
-        glUniform3fv(lightDirLoc, 1, glm::value_ptr(glm::inverseTranspose(glm::mat3(view * lightRotation)) * lightDir));
-
-        // Update uniforms
-        glUniform1f(glGetUniformLocation(myCustomShader.shaderProgram, "time"), currentTime);
-
-        // Update effect uniforms if they've changed
-        if (fogEnabled) {
-            glUniform1i(glGetUniformLocation(myCustomShader.shaderProgram, "fogEnabled"), fogEnabled);
-            glUniform3fv(glGetUniformLocation(myCustomShader.shaderProgram, "fogColor"), 1, glm::value_ptr(fogColor));
-        }
-
-        // Update wind
-        glUniform1f(glGetUniformLocation(myCustomShader.shaderProgram, "windStrength"), windStrength);
-        glUniform3fv(glGetUniformLocation(myCustomShader.shaderProgram, "windDirection"), 1, glm::value_ptr(windDirection));
-
-        // Bind shadow map
-        glActiveTexture(GL_TEXTURE3);
-        glBindTexture(GL_TEXTURE_2D, depthMapTexture);
-        glUniform1i(glGetUniformLocation(myCustomShader.shaderProgram, "shadowMap"), 3);
-
-        // Send light space matrix to shader
-        glUniformMatrix4fv(glGetUniformLocation(myCustomShader.shaderProgram, "lightSpaceTrMatrix"),
-                           1, GL_FALSE, glm::value_ptr(lightSpaceMatrix));
-
-        // Update point light position in view space
-        glm::vec3 pointLightPosView = glm::vec3(view * glm::vec4(pointLightPos, 1.0));
-        glUniform3fv(pointLightPosLoc, 1, glm::value_ptr(pointLightPosView));
-
-        // Draw scene objects
-        drawObjects(myCustomShader, false);
-
-        // Draw light cube for directional light
-        lightShader.useShaderProgram();
-        glUniformMatrix4fv(glGetUniformLocation(lightShader.shaderProgram, "view"),
-                           1, GL_FALSE, glm::value_ptr(view));
-
-        model = lightRotation;
-        model = glm::translate(model, 1.0f * lightDir);
-        model = glm::scale(model, glm::vec3(0.05f, 0.05f, 0.05f));
-        glUniformMatrix4fv(glGetUniformLocation(lightShader.shaderProgram, "model"),
-                           1, GL_FALSE, glm::value_ptr(model));
-
-        lightCube.Draw(lightShader);
-
-        // Draw light cube for point light
-        model = glm::mat4(1.0f);
-        model = glm::translate(model, pointLightPos);
-        model = glm::scale(model, glm::vec3(0.05f, 0.05f, 0.05f));
-        glUniformMatrix4fv(glGetUniformLocation(lightShader.shaderProgram, "model"),
-                           1, GL_FALSE, glm::value_ptr(model));
-
-        lightCube.Draw(lightShader);
-
-        // Draw rain if enabled
-        if (rainSystem.isEnabled()) {
-            glEnable(GL_BLEND);
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-            rainSystem.update(deltaTime);
-
-            rainShader.useShaderProgram();
-            glUniformMatrix4fv(glGetUniformLocation(rainShader.shaderProgram, "projection"),
-                              1, GL_FALSE, glm::value_ptr(projection));
-            glUniformMatrix4fv(glGetUniformLocation(rainShader.shaderProgram, "view"),
-                              1, GL_FALSE, glm::value_ptr(view));
-
-            rainSystem.draw(rainShader);
-
-            glDisable(GL_BLEND);
-        }
-
-        // Draw skybox
-        glDepthFunc(GL_LEQUAL);
-        skyboxShader.useShaderProgram();
-        view = glm::mat4(glm::mat3(myCamera.getViewMatrix())); // Remove translation
-        glUniformMatrix4fv(glGetUniformLocation(skyboxShader.shaderProgram, "view"), 1, GL_FALSE, glm::value_ptr(view));
-        glUniformMatrix4fv(glGetUniformLocation(skyboxShader.shaderProgram, "projection"), 1, GL_FALSE,
-                           glm::value_ptr(projection));
-
-        glBindVertexArray(skyboxVAO);
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_CUBE_MAP, cubemapTexture);
-        glDrawArrays(GL_TRIANGLES, 0, 36);
-        glBindVertexArray(0);
-        glDepthFunc(GL_LESS);
-
-        // Restore normal polygon mode after frame is rendered
-        glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
-    }
+    glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 }
 void cleanup() {
     glDeleteTextures(1, &depthMapTexture);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glDeleteFramebuffers(1, &shadowMapFBO);
     glfwDestroyWindow(glWindow);
+    glDeleteFramebuffers(1, &motionBlurFBO);
+    glDeleteTextures(1, &motionBlurTexture);
+    if(quadVAO != 0) {
+        glDeleteVertexArrays(1, &quadVAO);
+        glDeleteBuffers(1, &quadVBO);
+    }
     //close GL context and any other GLFW resources
     glfwTerminate();
 }

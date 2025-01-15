@@ -1111,10 +1111,10 @@
 				},
 				{
 					"name" : "HELPSTRING",
-					"value" : "The CMake toolchain file"
+					"value" : "No help, variable specified on the command line."
 				}
 			],
-			"type" : "FILEPATH",
+			"type" : "UNINITIALIZED",
 			"value" : "/Users/pauloprisor/.vcpkg-clion/vcpkg/scripts/buildsystems/vcpkg.cmake"
 		},
 		{
@@ -1156,6 +1156,18 @@
 			],
 			"type" : "INTERNAL",
 			"value" : "[TRUE][v()]"
+		},
+		{
+			"name" : "OPENAL_LIB",
+			"properties" : 
+			[
+				{
+					"name" : "HELPSTRING",
+					"value" : "Path to a library."
+				}
+			],
+			"type" : "FILEPATH",
+			"value" : "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.2.sdk/System/Library/Frameworks/OpenAL.framework"
 		},
 		{
 			"name" : "VCPKG_APPLOCAL_DEPS",

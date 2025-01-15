@@ -18,6 +18,7 @@ set(SOURCE_FILES
         Window.cpp
 )
 
+
 # Create executable
 add_executable(${PROJECT_NAME} ${SOURCE_FILES})
 
